@@ -33,7 +33,7 @@ usage() {
 vet ${VERSION} - A safer way to run remote scripts.
 
 USAGE:
-    vet [OPTIONS] <URL> [SCRIPT_ARGUMENTS...]
+    vet [OPTIONS] <URL|FILE_PATH> [SCRIPT_ARGUMENTS...]
 
 OPTIONS:
     -f, --force     Skip all interactive prompts and execute immediately.
@@ -54,8 +54,23 @@ check_dependencies() {
     elif command -v wget &>/dev/null; then
         DOWNLOAD_CMD=(wget -qO)
     else
-        log_error "This tool requires either 'curl' or 'wget'."
+        log_error "This tool requires either 'curl' or 'wget' for remote URLs."
         exit 1
+    fi
+}
+
+# Check if the input is a local file path
+is_local_file() {
+    local input="$1"
+    # Check if it's an absolute path, relative path, or doesn't contain URL schemes
+    if [[ "$input" =~ ^(https?|ftp|ftps):\/\/ ]]; then
+        return 1  # It's a URL
+    elif [[ -f "$input" ]]; then
+        return 0  # It's an existing local file
+    elif [[ "$input" =~ ^[.\/~] ]] || [[ "$input" =~ \/ ]] && [[ ! "$input" =~ :\/\/ ]]; then
+        return 0  # It looks like a file path (even if file doesn't exist yet)
+    else
+        return 1  # Assume it's a URL
     fi
 }
 
@@ -91,7 +106,7 @@ done
 URL="${1-}"
 
 if [ -z "$URL" ]; then
-    log_error "No URL provided."
+    log_error "No URL or file path provided."
     usage
     exit 1
 fi
@@ -99,20 +114,36 @@ shift
 
 SCRIPT_ARGS=("$@")
 
-check_dependencies
-
 mkdir -p "$CACHE_DIR"
 TMPFILE=$(mktemp) || { log_error "Failed to create temporary file."; exit 1; }
 TMPFILE_DIFF=$(mktemp) || { log_error "Failed to create temporary diff file."; exit 1; }
 
-log_info "Downloading script from: $URL"
-if ! "${DOWNLOAD_CMD[@]}" "$TMPFILE" "$URL"; then
-    log_error "Download failed. Check URL and network connection."
-    exit 1
+# Check if input is a local file or remote URL
+if is_local_file "$URL"; then
+    # Handle local file
+    if [[ ! -f "$URL" ]]; then
+        log_error "Local file does not exist: $URL"
+        exit 1
+    fi
+    
+    log_info "Using local script file: $URL"
+    if ! cp "$URL" "$TMPFILE"; then
+        log_error "Failed to copy local file."
+        exit 1
+    fi
+else
+    # Handle remote URL
+    check_dependencies
+    
+    log_info "Downloading script from: $URL"
+    if ! "${DOWNLOAD_CMD[@]}" "$TMPFILE" "$URL"; then
+        log_error "Download failed. Check URL and network connection."
+        exit 1
+    fi
 fi
 
 if [ ! -s "$TMPFILE" ]; then
-    log_error "Downloaded file is empty. The URL may be incorrect."
+    log_error "Script file is empty. The URL or file path may be incorrect."
     exit 1
 fi
 
